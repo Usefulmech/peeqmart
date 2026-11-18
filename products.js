@@ -1,16 +1,28 @@
-import fallbackProducts from "./products.json";
-
 const API_URL = "https://dummyjson.com/products?limit=20";
+const FALLBACK_URL = "./products.json";
 
 let allProducts = [];
 let onAddToCartCallback = null;
 
-function formatNGN(price) {
-  return new Intl.NumberFormat("en-NG", {
+const el = {
+  status: () => document.getElementById("products-status"),
+  error: () => document.getElementById("products-error"),
+  list: () => document.getElementById("product-list"),
+  search: () => document.getElementById("product-search"),
+  category: () => document.getElementById("category-filter"),
+};
+
+function formatPrice(price) {
+  return new Intl.NumberFormat("en-US", {
     style: "currency",
-    currency: "NGN",
-    maximumFractionDigits: 0,
+    currency: "USD",
   }).format(price);
+}
+
+function escapeHTML(str) {
+  return String(str).replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
 }
 
 function normalizeProduct(item) {
@@ -24,130 +36,121 @@ function normalizeProduct(item) {
   };
 }
 
-async function fetchProducts() {
-  const loadingEl = document.getElementById("products-loading");
-  const errorEl = document.getElementById("products-error");
+function setStatus(message) {
+  const status = el.status();
+  if (status) status.textContent = message;
+}
 
-  if (loadingEl) loadingEl.style.display = "block";
-  if (errorEl) errorEl.style.display = "none";
+function showError(message) {
+  const error = el.error();
+  if (!error) return;
+  error.textContent = message;
+  error.hidden = false;
+}
+
+function clearError() {
+  const error = el.error();
+  if (!error) return;
+  error.textContent = "";
+  error.hidden = true;
+}
+
+async function fetchProducts() {
+  setStatus("Loading products...");
+  clearError();
 
   try {
     const response = await fetch(API_URL);
-
-    if (!response.ok) {
-      throw new Error(`Request failed: ${response.status}`);
-    }
-
+    if (!response.ok) throw new Error(`Request failed: ${response.status}`);
     const data = await response.json();
     return data.products.map(normalizeProduct);
   } catch {
-    if (errorEl) {
-      errorEl.textContent =
-        "Could not load products from the server. Showing saved products instead.";
-      errorEl.style.display = "block";
-    }
-    return fallbackProducts.map(normalizeProduct);
-  } finally {
-    if (loadingEl) loadingEl.style.display = "none";
+    showError("Could not reach the product server. Showing saved products instead.");
+    const response = await fetch(FALLBACK_URL);
+    if (!response.ok) throw new Error("Fallback products unavailable");
+    const data = await response.json();
+    return data.map(normalizeProduct);
   }
-}
-
-function getCategories(products) {
-  const unique = [...new Set(products.map((p) => p.category))];
-  return unique.sort();
 }
 
 function filterProducts(products, searchText, selectedCategory) {
+  const query = searchText.toLowerCase().trim();
   return products
-    .filter((p) =>
-      selectedCategory === "all" ? true : p.category === selectedCategory
-    )
-    .filter((p) =>
-      p.title.toLowerCase().includes(searchText.toLowerCase().trim())
-    );
+    .filter((p) => !selectedCategory || p.category === selectedCategory)
+    .filter((p) => p.title.toLowerCase().includes(query));
 }
 
 function renderProducts(products) {
-  const grid = document.getElementById("products-grid");
-  if (!grid) return;
+  const list = el.list();
+  if (!list) return;
 
   if (products.length === 0) {
-    grid.innerHTML = `<p class="products-empty">No products match your search.</p>`;
+    list.innerHTML = "";
+    setStatus("No products match your search.");
     return;
   }
 
-  grid.innerHTML = products
+  setStatus(`Showing ${products.length} of ${allProducts.length} products`);
+
+  list.innerHTML = products
     .map(
-      (product) => `
-      <div class="product-card" data-id="${product.id}">
-        <img
-          src="${product.thumbnail}"
-          alt="${product.title}"
-          class="product-thumbnail"
-          loading="lazy"
-        />
-        <div class="product-info">
-          <h3 class="product-title">${product.title}</h3>
-          <p class="product-category">${product.category}</p>
-          <p class="product-price">${formatNGN(product.price)}</p>
-          <button
-            class="btn-add-to-cart"
-            data-id="${product.id}"
-            ${product.stock === 0 ? "disabled" : ""}
-          >
-            ${product.stock === 0 ? "Out of Stock" : "Add to Cart"}
-          </button>
-        </div>
-      </div>
-    `
+      (p) => `
+      <article class="product-card">
+        <img class="product-image" src="${escapeHTML(p.thumbnail)}" alt="${escapeHTML(p.title)}" loading="lazy">
+        <p class="product-category">${escapeHTML(p.category)}</p>
+        <h2 class="product-title">${escapeHTML(p.title)}</h2>
+        <p class="product-price">${formatPrice(p.price)}</p>
+        <button class="button button-primary" type="button" data-id="${p.id}" ${p.stock === 0 ? "disabled" : ""}>
+          ${p.stock === 0 ? "Out of stock" : "Add to cart"}
+        </button>
+      </article>`
     )
     .join("");
-
-  grid.querySelectorAll(".btn-add-to-cart:not([disabled])").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const id = Number(btn.dataset.id);
-      const product = allProducts.find((p) => p.id === id);
-      if (product && onAddToCartCallback) {
-        onAddToCartCallback(product);
-      }
-    });
-  });
 }
 
 function renderCategoryFilter(products) {
-  const select = document.getElementById("category-filter");
+  const select = el.category();
   if (!select) return;
 
-  const categories = getCategories(products);
-
+  const categories = [...new Set(products.map((p) => p.category))].sort();
   select.innerHTML =
-    `<option value="all">All Categories</option>` +
+    `<option value="">All categories</option>` +
     categories
-      .map((cat) => `<option value="${cat}">${cat}</option>`)
+      .map((c) => `<option value="${escapeHTML(c)}">${escapeHTML(c)}</option>`)
       .join("");
 }
 
-function setupFilters() {
-  const searchInput = document.getElementById("product-search");
-  const categorySelect = document.getElementById("category-filter");
+function applyFilters() {
+  const searchText = el.search()?.value ?? "";
+  const category = el.category()?.value ?? "";
+  renderProducts(filterProducts(allProducts, searchText, category));
+}
 
-  function applyFilters() {
-    const searchText = searchInput ? searchInput.value : "";
-    const selectedCategory = categorySelect ? categorySelect.value : "all";
-    const filtered = filterProducts(allProducts, searchText, selectedCategory);
-    renderProducts(filtered);
-  }
+function setupEvents() {
+  el.search()?.addEventListener("input", applyFilters);
+  el.category()?.addEventListener("change", applyFilters);
 
-  if (searchInput) searchInput.addEventListener("input", applyFilters);
-  if (categorySelect) categorySelect.addEventListener("change", applyFilters);
+  // One delegated listener, survives re-renders
+  el.list()?.addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-id]");
+    if (!button || button.disabled) return;
+    const product = allProducts.find((p) => p.id === Number(button.dataset.id));
+    if (product && onAddToCartCallback) onAddToCartCallback(product);
+  });
 }
 
 export async function initializeProducts({ onAddToCart }) {
   onAddToCartCallback = onAddToCart;
 
-  allProducts = await fetchProducts();
+  try {
+    allProducts = await fetchProducts();
+  } catch {
+    setStatus("");
+    showError("Products could not be loaded. Please try again later.");
+    return;
+  }
 
   renderCategoryFilter(allProducts);
   renderProducts(allProducts);
-  setupFilters();
+  setupEvents();
 }
